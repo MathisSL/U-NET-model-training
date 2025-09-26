@@ -10,6 +10,7 @@ import os
 # Initialisation SummaryWriter
 writer = SummaryWriter('runs/U-Net_1')
 
+# Métrique de précision pour la segmentation
 def dice_coefficient(prediction, target, epsilon=1e-07):
     prediction_copy = prediction.clone()
     prediction_copy[prediction_copy < 0] = 0
@@ -35,19 +36,19 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
 
     train_dataset = CaravanaDataset(DATA_PATH)
-    generator = torch.Generator().manual_seed(42)
+    generator = torch.Generator().manual_seed(42) # On fixe la seed pour avoir à chaque run les mêmes split
     train_dataset, val_dataset = random_split(train_dataset, [0.8, 0.2], generator=generator)
 
     train_dataloader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_dataloader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE, shuffle=True)
     
     model = UNet(in_channels=3, num_classes=1).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE) # Algorithme AdamW va optimiser les paramètres en fonction des gradients
+    criterion = nn.BCEWithLogitsLoss() # Fonction de coût
 
     # Ajout du modèle à TensorBoard
-    dummy_input = torch.randn(1, 3, 512, 512).to(device)
-    writer.add_graph(model, dummy_input)
+    dummy_input = torch.randn(1, 3, 512, 512).to(device) # Variable pour envoyer le graph du modèle à TB
+    writer.add_graph(model, dummy_input) 
 
     # Ajouter les hyperparamètres
     hparams = {
@@ -55,49 +56,49 @@ if __name__ == "__main__":
         'batch_size': BATCH_SIZE,
         'epochs': EPOCHS
     }
-    writer.add_hparams(hparams, {})
+    writer.add_hparams(hparams, {}) # Ajout des hyperparamètres hparams à TB
 
     print("Début de l'entraînement de U-Net")
 
     # Boucle d'entraînement
     for epoch in tqdm(range(EPOCHS)):
-        model.train()
+        model.train() # Passage en mode entraînement, des couches spécifiques comme batchnorm, dropout.. agissent différemment en entraînement et inférence
         train_running_loss = 0
         train_running_dc = 0
         
-        for idx, img_mask in enumerate(tqdm(train_dataloader)):
+        for idx, img_mask in enumerate(tqdm(train_dataloader)): # enumerate renvoi aussi l'indice
             img = img_mask[0].float().to(device)
             mask = img_mask[1].float().to(device)
 
-            y_pred = model(img)
-            optimizer.zero_grad()
+            y_pred = model(img) # Prédiction du modèle sur les images d'entraînement
+            optimizer.zero_grad() # Réinitialisation des gradients pour éviter de les accumuler
 
-            loss = criterion(y_pred, mask)
-            train_running_loss += loss.item()
+            loss = criterion(y_pred, mask) # Calcul de la loss
+            train_running_loss += loss.item() # item() renvoi d'un dictionnaire les paires key-value
 
-            dc = dice_coefficient(y_pred, mask)
+            dc = dice_coefficient(y_pred, mask) # Calcul de la précision
             train_running_dc += dc.item()
 
-            loss.backward()
-            optimizer.step()
+            loss.backward() # Calcul des gradients en fonction de la loss
+            optimizer.step() # Mise à jour des poids et des biais avec AdamW
 
             # Log par batch (optionnel)
-            if idx % 10 == 0:
+            if idx % 10 == 0: #Tout les 10
                 global_step = epoch * len(train_dataloader) + idx
                 writer.add_scalar('Training/Loss_per_batch', loss.item(), global_step)
                 writer.add_scalar('Training/Dice_per_batch', dc.item(), global_step)
 
-        train_loss = train_running_loss / (idx + 1)
+        train_loss = train_running_loss / (idx + 1) # Correspond à la moyenne
         train_dc = train_running_dc / (idx + 1)
 
         # Boucle de validation
-        model.eval()
+        model.eval() # Mode évaluation
         val_running_loss = 0
         val_running_dc = 0
         
-        with torch.no_grad():
+        with torch.no_grad(): # On désactive les gradients car on entraîne pas (inférence)
             for idx, img_mask in enumerate(tqdm(val_dataloader)):
-                img = img_mask[0].float().to(device)
+                img = img_mask[0].float().to(device) # passage en mémoire gpu
                 mask = img_mask[1].float().to(device)
 
                 y_pred = model(img)
@@ -111,7 +112,7 @@ if __name__ == "__main__":
         val_dc_avg = val_running_dc / (idx + 1)
 
         # Log des métriques par époque
-        writer.add_scalar('Training/Loss_per_epoch', train_loss, epoch)
+        writer.add_scalar('Training/Loss_per_epoch', train_loss, epoch) 
         writer.add_scalar('Training/Dice_per_epoch', train_dc, epoch)
         writer.add_scalar('Validation/Loss_per_epoch', val_loss_avg, epoch)
         writer.add_scalar('Validation/Dice_per_epoch', val_dc_avg, epoch)
